@@ -1,12 +1,8 @@
-import https from 'node:https'
-import http from 'node:http'
-import crypto from 'node:crypto'
-import EventEmitter from 'node:events'
-import { URL } from 'node:url'
-
-/* Bun is problematic with PWSLs due leak of full implementation of TLS/NET modules */
-import { createRequire } from 'node:module'
-const require = createRequire(import.meta.url)
+const https = require('https')
+const http = require('http')
+const crypto = require('crypto')
+const { EventEmitter } = require('events')
+const { URL } = require('url')
 
 let nativeWs = null
 if (process.isBun) nativeWs = require('ws')
@@ -283,4 +279,4 @@ class WebSocket extends EventEmitter {
   }
 }
 
-export default nativeWs || WebSocket
+module.exports = nativeWs || WebSocket
