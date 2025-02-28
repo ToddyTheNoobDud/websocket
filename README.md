@@ -1,3 +1,7 @@
+# What is this fork?
+
+- Compatible with aqualink (require)
+
 # PWSL-mini
 
 A simplified version of PWSL (PerformanC's WebSocket Library)
