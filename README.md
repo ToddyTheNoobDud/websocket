@@ -25,9 +25,9 @@ $ npm i PerformanC/Internals#PWSL-mini
 ## Usage
 
 ```js
-import PWSL from '@performanc/pwsl-mini'
+const WebSocket = require("@toddynnn/pwsl-mini");
 
-const ws = new PWSL('ws://localhost:8080')
+const ws = new WebSocket('ws://localhost:8080')
 
 ws.on('open', () => {
   console.log('Connected to the server.')
