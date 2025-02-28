@@ -1,9 +1,8 @@
 {
-  "name": "@performanc/pwsl-mini",
+  "name": "@toddynnn/pwsl-mini",
   "version": "1.0.0",
   "description": "A simplified version of PWSL (PerformanC's WebSocket Library)",
   "main": "index.js",
-  "type": "module",
   "author": "The PerformanC Organization",
   "license": "BSD-2-Clause"
 }
