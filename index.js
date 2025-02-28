@@ -7,6 +7,18 @@ const { URL } = require('url')
 let nativeWs = null
 if (process.isBun) nativeWs = require('ws')
 
+const bufferPool = []
+function getBuffer(size) {
+  if (bufferPool.length > 0) {
+    return bufferPool.pop()
+  }
+  return Buffer.allocUnsafe(size)
+}
+
+function releaseBuffer(buffer) {
+  bufferPool.push(buffer)
+}
+
 function parseFrameHeader(buffer) {
   let startIndex = 2
 
@@ -29,18 +41,19 @@ function parseFrameHeader(buffer) {
     payloadLength = buffer.readUIntBE(2, 6)
   }
 
-  buffer = buffer.subarray(startIndex, startIndex + payloadLength)
+  const payloadBuffer = getBuffer(payloadLength)
+  buffer.copy(payloadBuffer, 0, startIndex, startIndex + payloadLength)
 
   if (mask) {
     for (let i = 0; i < payloadLength; i++) {
-      buffer[i] = buffer[i] ^ mask[i & 3]
+      payloadBuffer[i] = payloadBuffer[i] ^ mask[i & 3]
     }
   }
 
   return {
     opcode,
     fin,
-    buffer,
+    buffer: payloadBuffer,
     payloadLength
   }
 }
@@ -161,11 +174,12 @@ class WebSocket extends EventEmitter {
             break
           }
           case 0x9: {
-            const pong = Buffer.allocUnsafe(2)
+            const pong = getBuffer(2)
             pong[0] = 0x8a
             pong[1] = 0x00
 
             this.socket.write(pong)
+            releaseBuffer(pong)
 
             break
           }
@@ -219,7 +233,7 @@ class WebSocket extends EventEmitter {
     let mask = null
 
     if (options.mask) {
-      mask = Buffer.allocUnsafe(4)
+      mask = getBuffer(4)
 
       while ((mask[0] | mask[1] | mask[2] | mask[3]) === 0)
         crypto.randomFillSync(mask, 0, 4)
@@ -235,7 +249,7 @@ class WebSocket extends EventEmitter {
       payloadLength = 126
     }
 
-    const header = Buffer.allocUnsafe(payloadStartIndex)
+    const header = getBuffer(payloadStartIndex)
     header[0] = options.fin ? options.opcode | 128 : options.opcode
     header[1] = payloadLength
 
@@ -255,9 +269,11 @@ class WebSocket extends EventEmitter {
       for (let i = 0; i < options.len; i++) {
         data[i] = data[i] ^ mask[i & 3]
       }
+      releaseBuffer(mask)
     }
 
     if (this.socket) this.socket.write(Buffer.concat([ header, data ]))
+    releaseBuffer(header)
 
     return true
   }
@@ -269,11 +285,12 @@ class WebSocket extends EventEmitter {
   }
 
   close(code, reason) {
-    const data = Buffer.allocUnsafe(2 + Buffer.byteLength(reason ?? 'normal close'))
+    const data = getBuffer(2 + Buffer.byteLength(reason ?? 'normal close'))
     data.writeUInt16BE(code ?? 1000)
     data.write(reason ?? 'normal close', 2)
 
     this.sendData(data, { len: data.length, fin: true, opcode: 0x8 })
+    releaseBuffer(data)
 
     return true
   }
