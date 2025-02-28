@@ -1,6 +1,6 @@
 # What is this fork?
 
-- Compatible with aqualink (require)
+- Compatible with aqualink (require) + Own performance improvements
 
 # PWSL-mini
 
@@ -59,6 +59,7 @@ It is mandatory to follow the PerformanC's [contribution guidelines](https://git
 ## Projects using PWSL-mini
 
 - [FastLink](https://github.com/PerformanC/FastLink)
+- [Aqualink](https://github.com/ToddyTheNoobDud/AquaLink)
 
 ## License
 
