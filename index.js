@@ -3,44 +3,55 @@ const http = require('http');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { URL } = require('url');
+
 let nativeWs = null;
 if (process.isBun) nativeWs = require('ws');
+
 const bufferPool = [];
+const POOL_LIMIT = 100;
+
 function getBuffer(size) {
   return bufferPool.length > 0 ? bufferPool.pop() : Buffer.allocUnsafe(size);
 }
+
 function releaseBuffer(buffer) {
-  if (buffer.length < 1024) {
+  if (buffer.length < 1024 && bufferPool.length < POOL_LIMIT) {
     bufferPool.push(buffer);
   }
 }
+
 function parseFrameHeader(buffer) {
   let startIndex = 2;
   const opcode = buffer[0] & 15;
   const fin = (buffer[0] & 128) === 128;
   let payloadLength = buffer[1] & 127;
   let mask = null;
+
   if ((buffer[1] & 128) === 128) {
     mask = buffer.subarray(startIndex, startIndex + 4);
     startIndex += 4;
   }
+  
   if (payloadLength === 126) {
-    startIndex += 2;
     payloadLength = buffer.readUInt16BE(2);
+    startIndex += 2;
   } else if (payloadLength === 127) {
-    startIndex += 8;
     payloadLength = buffer.readUIntBE(2, 6);
+    startIndex += 8;
   }
+  
   const payloadBuffer = getBuffer(payloadLength);
   buffer.copy(payloadBuffer, 0, startIndex, startIndex + payloadLength);
-  
+
   if (mask) {
     for (let i = 0; i < payloadLength; i++) {
       payloadBuffer[i] ^= mask[i & 3];
     }
   }
+
   return { opcode, fin, buffer: payloadBuffer, payloadLength };
 }
+
 class WebSocket extends EventEmitter {
   constructor(url, options) {
     super();
@@ -50,58 +61,66 @@ class WebSocket extends EventEmitter {
     this.continueInfo = { type: -1, buffer: [] };
     this.connect();
   }
+
   connect() {
     const parsedUrl = new URL(this.url);
     const isSecure = parsedUrl.protocol === 'wss:';
     const agent = isSecure ? https : http;
     const key = crypto.randomBytes(16).toString('base64');
     
-    const request = agent.request((isSecure ? 'https://' : 'http://') + parsedUrl.hostname + parsedUrl.pathname + parsedUrl.search, {
-      port: parsedUrl.port || (isSecure ? 443 : 80),
-      timeout: this.options?.timeout ?? 0,
-      headers: {
-        'Sec-WebSocket-Key': key,
-        'Sec-WebSocket-Version': 13,
-        'Upgrade': 'websocket',
-        'Connection': 'Upgrade',
-        ...(this.options?.headers || {})
-      },
-      method: 'GET'
-    });
-    request.on('error', (err) => {
-      this.handleError(err);
-    });
-    request.on('upgrade', (res, socket, head) => {
-      this.handleUpgrade(res, socket, head, key);
-    });
+    const request = agent.request(
+      (isSecure ? 'https://' : 'http://') + parsedUrl.hostname + parsedUrl.pathname + parsedUrl.search, 
+      {
+        port: parsedUrl.port || (isSecure ? 443 : 80),
+        timeout: this.options?.timeout ?? 0,
+        headers: {
+          'Sec-WebSocket-Key': key,
+          'Sec-WebSocket-Version': 13,
+          'Upgrade': 'websocket',
+          'Connection': 'Upgrade',
+          ...(this.options?.headers || {})
+        },
+        method: 'GET'
+      }
+    );
+
+    request.on('error', (err) => this.handleError(err));
+    request.on('upgrade', (res, socket, head) => this.handleUpgrade(res, socket, head, key));
     request.end();
   }
+
   handleError(err) {
     this.emit('error', err);
     this.emit('close');
     this.cleanup();
   }
+
   handleUpgrade(res, socket, head, key) {
     socket.setNoDelay();
     socket.setKeepAlive(true);
     if (head.length !== 0) socket.unshift(head);
+    
     if (res.headers.upgrade.toLowerCase() !== 'websocket') {
       socket.destroy();
       return;
     }
+    
     const digest = crypto.createHash('sha1')
       .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
       .digest('base64');
+    
     if (res.headers['sec-websocket-accept'] !== digest) {
       socket.destroy();
       return;
     }
+
     socket.on('data', (data) => this.handleData(data));
     socket.on('close', () => this.handleClose());
     socket.on('error', (err) => this.handleError(err));
     this.socket = socket;
     this.emit('open', socket, res.headers);
   }
+
   handleData(data) {
     const headers = parseFrameHeader(data);
     switch (headers.opcode) {
@@ -126,19 +145,27 @@ class WebSocket extends EventEmitter {
       this.socket.unshift(headers.buffer);
     }
   }
+
+  handleClose() {
+    this.emit('close');
+    this.cleanup();
+  }
+
   handleContinuationFrame(headers) {
     this.continueInfo.buffer.push(headers.buffer);
     if (headers.fin) {
-      this.emit('message', (this.continueInfo.type === 1 ? this.continueInfo.buffer.join('') : Buffer.concat(this.continueInfo.buffer)));
+      this.emit('message', this.continueInfo.type === 1 ? this.continueInfo.buffer.join('') : Buffer.concat(this.continueInfo.buffer));
       this.continueInfo = { type: -1, buffer: [] };
     }
   }
+
   handleTextBinaryFrame(headers) {
     if (this.continueInfo.type !== -1 && this.continueInfo.type !== headers.opcode) {
       this.close(1002, 'Invalid continuation frame');
       this.cleanup();
       return;
     }
+
     if (!headers.fin) {
       this.continueInfo.type = headers.opcode;
       this.continueInfo.buffer.push(headers.buffer);
@@ -146,12 +173,14 @@ class WebSocket extends EventEmitter {
       this.emit('message', headers.opcode === 0x1 ? headers.buffer.toString('utf8') : headers.buffer);
     }
   }
+
   handleCloseFrame(headers) {
     const code = headers.buffer.length === 0 ? 1006 : headers.buffer.readUInt16BE(0);
     const reason = headers.buffer.length <= 2 ? '' : headers.buffer.subarray(2).toString('utf-8');
     this.emit('close', code, reason);
     this.cleanup();
   }
+
   sendPong() {
     const pong = getBuffer(2);
     pong[0] = 0x8A;
@@ -159,6 +188,7 @@ class WebSocket extends EventEmitter {
     this.socket.write(pong);
     releaseBuffer(pong);
   }
+
   cleanup() {
     if (this.socket) {
       this.socket.destroy();
@@ -166,17 +196,21 @@ class WebSocket extends EventEmitter {
     }
     this.continueInfo = { type: -1, buffer: [] };
   }
+
   sendData(data, options) {
     if (!this.socket) return false;
+
     let payloadStartIndex = 2;
     let payloadLength = options.len;
     let mask = null;
+
     if (options.mask) {
       mask = getBuffer(4);
       while ((mask[0] | mask[1] | mask[2] | mask[3]) === 0)
         crypto.randomFillSync(mask, 0, 4);
       payloadStartIndex += 4;
     }
+
     if (options.len >= 65536) {
       payloadStartIndex += 8;
       payloadLength = 127;
@@ -184,14 +218,17 @@ class WebSocket extends EventEmitter {
       payloadStartIndex += 2;
       payloadLength = 126;
     }
+
     const header = getBuffer(payloadStartIndex);
     header[0] = options.fin ? options.opcode | 128 : options.opcode;
     header[1] = payloadLength;
+
     if (payloadLength === 126) {
       header.writeUInt16BE(options.len, 2);
     } else if (payloadLength === 127) {
       header.writeUIntBE(options.len, 2, 6);
     }
+
     if (options.mask) {
       header[1] |= 128;
       header[payloadStartIndex - 4] = mask[0];
@@ -203,14 +240,17 @@ class WebSocket extends EventEmitter {
       }
       releaseBuffer(mask);
     }
+
     this.socket.write(Buffer.concat([header, data]));
     releaseBuffer(header);
     return true;
   }
+
   send(data) {
     const payload = Buffer.from(data, 'utf-8');
     return this.sendData(payload, { len: payload.length, fin: true, opcode: 0x01, mask: true });
   }
+
   close(code, reason) {
     const data = getBuffer(2 + Buffer.byteLength(reason ?? 'normal close'));
     data.writeUInt16BE(code ?? 1000);
@@ -220,4 +260,5 @@ class WebSocket extends EventEmitter {
     return true;
   }
 }
+
 module.exports = nativeWs || WebSocket;
