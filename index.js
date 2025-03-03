@@ -78,7 +78,7 @@ class WebSocket extends EventEmitter {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (isSecure ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
-      timeout: this.options?.timeout ?? 0,
+      timeout: this.options?.timeout ?? 30000,
       headers: {
         'Sec-WebSocket-Key': key,
         'Sec-WebSocket-Version': 13,
@@ -87,7 +87,7 @@ class WebSocket extends EventEmitter {
         ...(this.options?.headers || {})
       },
       method: 'GET'
-    })
+    });
 
     request.on('error', (err) => {
       this.emit('error', err)
